@@ -19,7 +19,7 @@ provider "azurerm" {
 data "azurerm_client_config" "current" {}
 
 locals {
-  prefix   = "ssp-menu-${var.environment_name}"
+  prefix = "ssp-menu-${var.environment_name}"
   tags = {
     service     = "menu-service"
     environment = var.environment_name

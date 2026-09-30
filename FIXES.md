@@ -223,3 +223,47 @@ File: infra/main.tf
 Fix: Secret handling
 
 Why it matters: Secrets stay out of code, state and pipeline; no credentials to rotate in the app
+
+## Design Choices
+
+The pipeline uses separate stages for build, image scanning and push, dev deployment, and production deployment. Maven caching is used to reduce build times, and Docker images use the Azure DevOps Build ID as an immutable tag. The Dockerfile uses separate build and runtime stages and runs the application as a non-root user.
+
+Azure Container Registry uses managed identity rather than admin credentials. Key Vault is used for application secrets. Terraform uses remote state with separate state keys for each environment. Production requires manual approval before deployment.
+
+## Things Left Out
+
+1. `check-coverage.ps1`
+
+   The script was not implemented and is currently a placeholder.
+
+2. `check-deploy-window.ps1`
+
+   The script was not implemented and is currently a placeholder.
+
+3. `smoke-test.ps1`
+
+   The script was not implemented and is currently a placeholder.
+
+## Not fixed / known limits
+
+* **Spring Boot 2.7.18** is past open-source support. Real fix is a 3.x upgrade. Trivy may flag CVEs only that upgrade resolves.
+
+* **Not run against Azure.** Terraform `validate`, the pipeline and the alert still need a real run (see test plan).
+
+* **Assumed app port 8080** and that the app reads `DB_PASSWORD`. Confirm in the source and adjust `WEBSITES_PORT` / `secret_app_settings`.
+
+* **Names are duplicated** between tfvars and the pipeline variables block; they must be changed together.
+
+## pom.xml
+
+Spring Boot 2.7.18 is end of OSS support and was not changed. The real fix is to upgrade to 3.x.
+
+JaCoCo is already configured in the pom, so the pipeline runs `clean test` instead of calling JaCoCo goals itself (avoids a duplicate agent).
+
+## Scaling to 38 Countries
+
+I would use reusable Terraform modules to deploy the service consistently across multiple Azure regions. Each country or region would have its own environment configuration, secrets and Terraform state where required.
+
+Azure Front Door could provide global routing to regional deployments. Monitoring would be centralised while retaining regional metrics and alerts. Deployments would be rolled out progressively across regions rather than deploying to all countries simultaneously, as specified in the 1st stage interview.
+
+I would also consider data residency and local compliance requirements, regional disaster recovery, autoscaling, DNS and TLS management, and per-region cost monitoring.
