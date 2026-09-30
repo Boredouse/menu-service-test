@@ -274,3 +274,12 @@ I would use reusable Terraform modules to deploy the service consistently across
 Azure Front Door could provide global routing to regional deployments. Monitoring would be centralised while retaining regional metrics and alerts. Deployments would be rolled out progressively across regions rather than deploying to all countries simultaneously, as specified in the 1st stage interview.
 
 I would also consider data residency and local compliance requirements, regional disaster recovery, autoscaling, DNS and TLS management, and per-region cost monitoring.
+
+## Areas to Explore Further
+
+- Multi-region Azure architecture for operating across 38 countries.
+- Data residency and country-specific compliance requirements.
+- Automated rollback and deployment strategies.
+- High availability and disaster recovery.
+- Further testing, including integration and end-to-end testing.
+- Cost optimisation at larger scale.
