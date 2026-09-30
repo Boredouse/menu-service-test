@@ -230,20 +230,6 @@ The pipeline uses separate stages for build, image scanning and push, dev deploy
 
 Azure Container Registry uses managed identity rather than admin credentials. Key Vault is used for application secrets. Terraform uses remote state with separate state keys for each environment. Production requires manual approval before deployment.
 
-## Things Left Out
-
-1. `check-coverage.ps1`
-
-   The script was not implemented and is currently a placeholder.
-
-2. `check-deploy-window.ps1`
-
-   The script was not implemented and is currently a placeholder.
-
-3. `smoke-test.ps1`
-
-   The script was not implemented and is currently a placeholder.
-
 ## Not fixed / known limits
 
 * **Spring Boot 2.7.18** is past open-source support. Real fix is a 3.x upgrade. Trivy may flag CVEs only that upgrade resolves.
@@ -254,11 +240,32 @@ Azure Container Registry uses managed identity rather than admin credentials. Ke
 
 * **Names are duplicated** between tfvars and the pipeline variables block; they must be changed together.
 
+- **Not run against Azure.** Terraform was validated with `terraform validate`, but `terraform plan/apply`, the pipeline and the alert still need a real run against Azure.
+
 ## pom.xml
 
 Spring Boot 2.7.18 is end of OSS support and was not changed. The real fix is to upgrade to 3.x.
 
 JaCoCo is already configured in the pom, so the pipeline runs `clean test` instead of calling JaCoCo goals itself (avoids a duplicate agent).
+
+## Remaining Work
+
+If continuing beyond the 3-hour limit, I would have:
+
+- Implemented `check-coverage.ps1` to enforce the 70% coverage threshold.
+- Implemented `check-deploy-window.ps1` to enforce the 06:00–10:00 UK production deployment block.
+- Implemented `smoke-test.ps1` to test `/health` and `/menu/LHR-T5-001` with retries.
+- Added and tested the production HTTP 5xx alert.
+- Run `terraform validate`, `terraform plan`, and, where Azure access was available, apply the infrastructure and run the pipeline end-to-end.
+- Verify the assumed application port and `DB_PASSWORD` configuration against the application source.
+- Test the deployment and rollback behaviour in Azure.
+
+### Assumptions and Trade-offs
+
+- The application is assumed to listen on port 8080 and consume `DB_PASSWORD`.
+- The solution uses separate dev and prod Azure resources rather than designing the full multi-country architecture.
+- Spring Boot 2.7.18 was left unchanged because upgrading to Spring Boot 3.x could require application-level changes and testing.
+- The production alert and PowerShell scripts were identified but not fully implemented within the time limit.
 
 ## Scaling to 38 Countries
 
