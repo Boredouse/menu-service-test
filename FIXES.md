@@ -283,3 +283,8 @@ I would also consider data residency and local compliance requirements, regional
 - High availability and disaster recovery.
 - Further testing, including integration and end-to-end testing.
 - Cost optimisation at larger scale.
+- Azure RBAC and least-privilege access across environments.
+- Network security, including private endpoints and restricting public access where possible.
+- Container image signing and verification.
+- Software supply-chain security, including dependency and SBOM scanning.
+- Key Vault secret rotation and access auditing.
