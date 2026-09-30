@@ -1,31 +1,161 @@
+# Flow: Build -> Image (scan, push) -> Dev (on main) -> Prod (manual approval + time window)
 trigger:
   branches:
-    include:
-      - '*'
-
-variables:
-  dbPassword: 'P@ssw0rd123'
+    include: [main]
+pr:
+  branches:
+    include: [main]
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: ubuntu-24.04   # pinned, not ubuntu-latest
 
-steps:
-  - task: Maven@3
-    inputs:
-      mavenPomFile: 'pom.xml'
-      goals: 'clean test'
-    continueOnError: true
+variables:
+  imageRepo: ssp/menu-service
+  imageTag: $(Build.BuildId)
+  devAcr: sspmenudevacr
+  prodAcr: sspmenuprodacr
+  rgDev: rg-ssp-menu-dev
+  rgProd: rg-ssp-menu-prod
+  MAVEN_CACHE_FOLDER: $(Pipeline.Workspace)/.m2/repository
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+  isMain: $[and(eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))]
 
-  - task: Docker@2
-    inputs:
-      command: 'buildAndPush'
-      repository: 'ssp/menu-service'
-      dockerfile: 'Dockerfile'
-      containerRegistry: 'ssp-acr-connection'
-      tags: 'latest'
+stages:
+# ------------------------------------------------------------------ BUILD
+- stage: Build
+  jobs:
+  - job: TestAndCoverage
+    steps:
+    - task: Cache@2
+      inputs:
+        key: 'maven | "$(Agent.OS)" | pom.xml'
+        restoreKeys: maven | "$(Agent.OS)"
+        path: $(MAVEN_CACHE_FOLDER)
+      displayName: Cache Maven repo
 
-  - task: AzureWebApp@1
-    inputs:
-      azureSubscription: 'ssp-azure-connection'
-      appName: 'ssp-menu-service-prod'
-      containers: 'sspacr.azurecr.io/ssp/menu-service:latest'
+    # pom.xml already binds JaCoCo prepare-agent + report (test phase)
+    - task: Maven@3
+      displayName: Unit tests + coverage
+      inputs:
+        mavenPomFile: pom.xml
+        goals: 'clean test'
+        options: '-B'
+        publishJUnitResults: true
+        testResultsFiles: '**/surefire-reports/TEST-*.xml'
+        javaHomeOption: JDKVersion
+        jdkVersionOption: '1.17'
+      # no continueOnError: failing tests fail the build
+
+    - task: PublishCodeCoverageResults@2
+      displayName: Publish coverage
+      condition: succeededOrFailed()
+      inputs:
+        summaryFileLocation: $(System.DefaultWorkingDirectory)/target/site/jacoco/jacoco.xml
+
+    - pwsh: ./scripts/check-coverage.ps1 -Min 70
+      displayName: Enforce 70% coverage
+
+# ------------------------------------------------------------------ IMAGE
+- stage: Image
+  dependsOn: Build
+  jobs:
+  - job: BuildScanPush
+    steps:
+    - task: Docker@2
+      displayName: Build image
+      inputs:
+        command: build
+        containerRegistry: ssp-acr-connection     # service connection -> dev ACR
+        repository: $(imageRepo)
+        dockerfile: Dockerfile
+        tags: $(imageTag)
+
+    # Fails on HIGH/CRITICAL that have a fix available
+    - script: |
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy:0.56.2 image \
+          --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed \
+          $(devAcr).azurecr.io/$(imageRepo):$(imageTag)
+      displayName: Trivy vulnerability scan
+
+    # Only push after tests + scan pass, and only from main
+    - task: Docker@2
+      displayName: Push image
+      condition: and(succeeded(), eq(variables.isMain, true))
+      inputs:
+        command: push
+        containerRegistry: ssp-acr-connection
+        repository: $(imageRepo)
+        tags: $(imageTag)
+
+# ------------------------------------------------------------------ DEV
+- stage: Dev
+  dependsOn: Image
+  condition: and(succeeded(), eq(variables.isMain, true))
+  jobs:
+  - deployment: DeployDev
+    environment: menu-dev
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: Deploy to dev
+            inputs:
+              azureSubscription: ssp-azure-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp config container set \
+                  --resource-group $(rgDev) --name ssp-menu-service-dev \
+                  --container-image-name $(devAcr).azurecr.io/$(imageRepo):$(imageTag) \
+                  --container-registry-url https://$(devAcr).azurecr.io
+                az webapp restart --resource-group $(rgDev) --name ssp-menu-service-dev
+          - pwsh: ./scripts/smoke-test.ps1 -BaseUrl https://ssp-menu-service-dev.azurewebsites.net
+            displayName: Smoke test dev
+
+# ------------------------------------------------------------------ PROD
+# Manual approval = Approval check on Environment "menu-prod" (Azure DevOps UI, not YAML).
+- stage: Prod
+  dependsOn: Dev
+  condition: and(succeeded(), eq(variables.isMain, true))
+  jobs:
+  - deployment: DeployProd
+    environment: menu-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          # First step after approval, so a late approval still gets checked
+          - pwsh: ./scripts/check-deploy-window.ps1
+            displayName: Block 06:00-10:00 UK time
+
+          # Promote the exact image tested in dev (no rebuild)
+          - task: AzureCLI@2
+            displayName: Promote image dev ACR -> prod ACR
+            inputs:
+              azureSubscription: ssp-azure-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az acr import --name $(prodAcr) \
+                  --source $(devAcr).azurecr.io/$(imageRepo):$(imageTag) \
+                  --image $(imageRepo):$(imageTag) --force
+
+          - task: AzureCLI@2
+            displayName: Deploy to prod
+            inputs:
+              azureSubscription: ssp-azure-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp config container set \
+                  --resource-group $(rgProd) --name ssp-menu-service-prod \
+                  --container-image-name $(prodAcr).azurecr.io/$(imageRepo):$(imageTag) \
+                  --container-registry-url https://$(prodAcr).azurecr.io
+                az webapp restart --resource-group $(rgProd) --name ssp-menu-service-prod
+          - pwsh: ./scripts/smoke-test.ps1 -BaseUrl https://ssp-menu-service-prod.azurewebsites.net
+            displayName: Smoke test prod

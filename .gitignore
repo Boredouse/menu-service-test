@@ -6,3 +6,8 @@ target/
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+# GitHub keys
+*.pem
+*.key
+*.pub
+id_*
